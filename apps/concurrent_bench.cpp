@@ -24,8 +24,17 @@
 namespace po = boost::program_options;
 
 template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t>
-bool concurrent_bench(const uint32_t L, const uint32_t R, const float alpha, const uint32_t num_threads)
+bool concurrent_bench(const std::string data_path, const std::string &query_file, const size_t begin_num, 
+                      const uint32_t L, const uint32_t R, const float alpha, const uint32_t num_threads, 
+                      const diskann::Metric metric, const bool use_opq, const bool use_pq_build, 
+                      const uint32_t build_PQ_bytes, const size_t batch_size, const uint32_t k)
 {
+    size_t data_num, data_dim, aligned_dim;
+    diskann::get_bin_metadata(data_path, data_num, data_dim);
+
+    size_t query_num, query_dim, query_aligned_dim;
+    diskann::load_aligned_bin<T>(query_file, query, query_num, query_dim, query_aligned_dim);
+
     auto index_build_params = diskann::IndexWriteParametersBuilder(L, R)
                                 .with_filter_list_size(Lf)
                                 .with_alpha(alpha)
@@ -40,55 +49,67 @@ bool concurrent_bench(const uint32_t L, const uint32_t R, const float alpha, con
                         .with_data_load_store_strategy(diskann::DataStoreStrategy::MEMORY)
                         .with_graph_load_store_strategy(diskann::GraphStoreStrategy::MEMORY)
                         .with_data_type(diskann_type_to_name<T>)
-                        .with_label_type(label_type)
-                        .is_dynamic_index(false)
+                        .with_label_type(diskann_type_to_name<labelT>)
+                        .with_tag_type(diskann_type_to_name<TagT>())
+                        .is_dynamic_index(true)
                         .with_index_write_params(index_build_params)
-                        .is_enable_tags(false)
+                        .is_enable_tags(true)
                         .is_use_opq(use_opq)
                         .is_pq_dist_build(use_pq_build)
                         .with_num_pq_chunks(build_PQ_bytes)
                         .build();
 
+    auto index_factory = diskann::IndexFactory(config);
+    auto index = index_factory.create_instance();
 
-    ccQuery = qt;
-    ANNK = k;
+    T *data = nullptr;
+    aligned_dim = ROUND_UP(data_dim, 8);
+    diskann::alloc_aligned((void **)&data, data_num * aligned_dim * sizeof(float),
+                            8 * sizeof(float));
 
-    size_t insertTotal = t.size(0);
-    size_t searchTotal = insertTotal * ((1 - writeRatio) / writeRatio);
+    // build with begin size
+    load_aligned_bin_part(data_path, data, 0, begin_size);
+    std::vector<uint32_t> tags(begin_size);
+    std::iota(tags.begin(), tags.end(), 1 + static_cast<uint32_t>(0));
+    index->build(data, begin_size, tags);
+
+    // concurrent read and write
+    size_t insert_total = data_num - begin_size;
+    size_t search_total = insert_total * ((1 - write_ratio) / write_ratio);
     size_t qtSize = qt.size(0);
-    size_t searchBatchSize = batchSize * ((1 - writeRatio) / writeRatio);
+    size_t search_batch_size = batch_size * ((1 - write_ratio) / write_ratio);
 
-    std::atomic<size_t> nextInsertIdx = 0, nextSearchIdx = 0;
-    std::atomic<size_t> completedInserts = 0, completedSearches = 0;
+    std::atomic<size_t> next_insert_idx = 0, next_search_idx = 0;
+    std::atomic<size_t> completed_inserts = 0, completed_searches = 0;
 
-    std::exception_ptr lastException = nullptr;
-    std::mutex lastExceptMutex, resultMutex, insertLatencyMutex, searchLatencyMutex;
+    std::exception_ptr last_exception = nullptr;
+    std::mutex last_except_mutex, result_mutex, insert_latency_mutex, search_latency_mutex;
 
-    std::vector<double> insertLatencies, searchLatencies;
+    std::vector<double> insert_latencies, search_latencies;
 
-    INTELLI::ThreadPool pool(numThreads);
+    INTELLI::ThreadPool pool(num_threads);
+    load_aligned_bin_part(data_path, data, begin_size, data_num - begin_size);
 
-    auto startTime = std::chrono::high_resolution_clock::now();
-    while (nextInsertIdx < insertTotal || nextSearchIdx < searchTotal)
+    diskann::Timer timer;
+    while (nextInsert_idx < insert_total || next_search_idx < search_total)
     {
-        size_t startInsert = nextInsertIdx.fetch_add(batchSize);
-        size_t endInsert = std::min(startInsert + batchSize, insertTotal);
+        size_t start_insert_offset = next_insert_idx + batch_size;
+        size_t end_insert_offset = std::min(start_insert_offset + batch_size, insert_total);
 
-        for (size_t idx = startInsert; idx < endInsert; ++idx)
+        for (size_t idx = start_insert_offset; idx < end_insert_offset; ++idx)
         {
             pool.enqueueTask([&, idx] {
-                auto taskStart = std::chrono::high_resolution_clock::now();
+                diskann::Timer insert_timer;
                 try
                 {
-                    auto in = t[idx];
-                    myIndexAlgo->insertTensor(in);
+                    int insert_result = -1;
+                    insert_result = index.insert_point(&data[(idx - begin_size) * aligned_dim], 1 + static_cast<TagT>(idx));
                     completedInserts.fetch_add(1);
 
-                    auto taskEnd = std::chrono::high_resolution_clock::now();
-                    double latency = std::chrono::duration<double, std::milli>(taskEnd - taskStart).count();
+                    double latency = timer.elapsed() / 1000000.0;
                     {
                         std::unique_lock<std::mutex> lock(insertLatencyMutex);
-                        insertLatencies.push_back(latency);
+                        insert_latencies.push_back(latency);
                     }
                 }
                 catch (...)
@@ -98,7 +119,7 @@ bool concurrent_bench(const uint32_t L, const uint32_t R, const float alpha, con
                 }
             });
         }
-
+        
         size_t startSearch = nextSearchIdx.fetch_add(searchBatchSize);
         size_t endSearch = std::min(startSearch + searchBatchSize, searchTotal);
 
