@@ -23,8 +23,33 @@
 
 namespace po = boost::program_options;
 
-bool concurrent_bench()
+template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t>
+bool concurrent_bench(const uint32_t L, const uint32_t R, const float alpha, const uint32_t num_threads)
 {
+    auto index_build_params = diskann::IndexWriteParametersBuilder(L, R)
+                                .with_filter_list_size(Lf)
+                                .with_alpha(alpha)
+                                .with_saturate_graph(false)
+                                .with_num_threads(num_threads)
+                                .build();
+
+    auto config = diskann::IndexConfigBuilder()
+                        .with_metric(metric)
+                        .with_dimension(data_dim)
+                        .with_max_points(data_num)
+                        .with_data_load_store_strategy(diskann::DataStoreStrategy::MEMORY)
+                        .with_graph_load_store_strategy(diskann::GraphStoreStrategy::MEMORY)
+                        .with_data_type(diskann_type_to_name<T>)
+                        .with_label_type(label_type)
+                        .is_dynamic_index(false)
+                        .with_index_write_params(index_build_params)
+                        .is_enable_tags(false)
+                        .is_use_opq(use_opq)
+                        .is_pq_dist_build(use_pq_build)
+                        .with_num_pq_chunks(build_PQ_bytes)
+                        .build();
+
+
     ccQuery = qt;
     ANNK = k;
 
