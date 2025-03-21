@@ -27,7 +27,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t>
 bool concurrent_bench(const std::string data_path, const std::string &query_file, const size_t begin_num, 
                       const uint32_t L, const uint32_t R, const float alpha, const uint32_t num_threads, 
                       const diskann::Metric metric, const bool use_opq, const bool use_pq_build, 
-                      const uint32_t build_PQ_bytes, const size_t batch_size, const uint32_t k)
+                      const uint32_t build_PQ_bytes, const size_t batch_size, const uint32_t recall_at)
 {
     size_t data_num, data_dim, aligned_dim;
     diskann::get_bin_metadata(data_path, data_num, data_dim);
@@ -85,110 +85,108 @@ bool concurrent_bench(const std::string data_path, const std::string &query_file
     std::exception_ptr last_exception = nullptr;
     std::mutex last_except_mutex, result_mutex, insert_latency_mutex, search_latency_mutex;
 
-    std::vector<double> insert_latencies, search_latencies;
+    std::vector<double> insert_latency_stats, search_latency_stats;
 
     INTELLI::ThreadPool pool(num_threads);
     load_aligned_bin_part(data_path, data, begin_size, data_num - begin_size);
 
     diskann::Timer timer;
-    while (nextInsert_idx < insert_total || next_search_idx < search_total)
+    while (next_insert_idx < insert_total || next_search_idx < search_total)
     {
         size_t start_insert_offset = next_insert_idx + batch_size;
         size_t end_insert_offset = std::min(start_insert_offset + batch_size, insert_total);
 
         for (size_t idx = start_insert_offset; idx < end_insert_offset; ++idx)
         {
-            pool.enqueueTask([&, idx] {
-                diskann::Timer insert_timer;
+            pool.enqueue_task([&, idx] {
                 try
                 {
+                    auto qs = std::chrono::high_resolution_clock::now();
+                  
                     int insert_result = -1;
-                    insert_result = index.insert_point(&data[(idx - begin_size) * aligned_dim], 1 + static_cast<TagT>(idx));
-                    completedInserts.fetch_add(1);
+                    insert_result = index->insert_point(&data[(idx - begin_size) * aligned_dim], 1 + static_cast<TagT>(idx));
+                    if (insert_result != 0) std::cerr << "Insert failed " << idx << std::endl;
 
-                    double latency = timer.elapsed() / 1000000.0;
+                    auto qe = std::chrono::high_resolution_clock::now();
+                    std::chrono::duration<double> diff = qe - qs;
                     {
-                        std::unique_lock<std::mutex> lock(insertLatencyMutex);
-                        insert_latencies.push_back(latency);
+                        std::unique_lock<std::mutex> lock(insert_latency_mutex);
+                        insert_latency_stats.push_back((float)(diff.count() * 1000000));
                     }
                 }
                 catch (...)
                 {
-                    std::unique_lock<std::mutex> lock(lastExceptMutex);
-                    lastException = std::current_exception();
+                    std::unique_lock<std::mutex> lock(last_except_mutex);
+                    last_exception = std::current_exception();
                 }
             });
         }
         
-        size_t startSearch = nextSearchIdx.fetch_add(searchBatchSize);
-        size_t endSearch = std::min(startSearch + searchBatchSize, searchTotal);
+        size_t start_search_offset = next_search_idx + search_batch_size;
+        size_t end_search_offset = std::min(start_search + search_batch_size, search_total);
 
-        size_t batchIdx = startSearch / searchBatchSize;
-        size_t batchEnd = initialSize + (batchIdx + 1) * searchBatchSize;
-
-        for (size_t idx = startSearch; idx < endSearch; ++idx)
+        size_t query_idx = 0;
+        for (size_t idx = start_search_offset; idx < end_search_offset; ++idx, ++query_idx)
         {
-            pool.enqueueTask([&, idx, batchEnd] {
-                auto taskStart = std::chrono::high_resolution_clock::now();
+            if (query_idx >= qeury_num) 
+                qeury_idx %= query_num;
+            pool.enqueue_task([&, qeury_idx] {
+                auto qs = std::chrono::high_resolution_clock::now();
                 try
                 {
-                    size_t queryIdx = randomMode ? (std::rand() % qtSize) : (idx % qtSize);
-                    auto q = qt[queryIdx];
-                    auto res = myIndexAlgo->searchIndex(q, k);
-                    completedSearches.fetch_add(1);
+                    auto qs = std::chrono::high_resolution_clock::now();
+                  
+                    std::vector<TagT> query_result_tags(recall_at);
+                    std::vector<T *> res
+                    index->search_with_tags(query + idx * query_aligned_dim, recall_at, L, 
+                                            query_result_tags.data(), nullptr, res);
 
-                    auto taskEnd = std::chrono::high_resolution_clock::now();
-                    double latency = std::chrono::duration<double, std::milli>(taskEnd - taskStart).count();
+                    auto qe = std::chrono::high_resolution_clock::now();
+                    std::chrono::duration<double> diff = qe - qs;
                     {
-                        std::unique_lock<std::mutex> lock(searchLatencyMutex);
-                        searchLatencies.push_back(latency);
+                        std::unique_lock<std::mutex> lock(search_latency_mutex);
+                        searchLatencies.push_back((float)(diff.count() * 1000000));
                     }
                     {
                         std::unique_lock<std::mutex> lock(resultMutex);
-                        searchRes.emplace_back(batchEnd, queryIdx, res);
+                        searchRes.emplace_back(end_insert_offset, query_idx, query_result_tags);
                     }
                 }
                 catch (...)
                 {
-                    std::unique_lock<std::mutex> lock(lastExceptMutex);
-                    lastException = std::current_exception();
+                    std::unique_lock<std::mutex> lock(last_except_mutex);
+                    last_exception = std::current_exception();
                 }
             });
         }
     }
 
-    pool.waitForTasks();
+    pool.wait_for_tasks();
 
-    auto endTime = std::chrono::high_resolution_clock::now();
-    double elapsedSec = std::chrono::duration<double>(endTime - startTime).count();
+    auto et = std::chrono::high_resolution_clock::now();
+    double elapsed_sec = std::chrono::duration<double>(et - st).count();
 
-    insertThroughput = completedInserts / elapsedSec;
-    searchThroughput = completedSearches / elapsedSec;
+    // ROUND UP
+    double insert_qps = insert_total / elapsed_sec;
+    double search_qps = search_total / elapsed_sec;
 
-    if (lastException)
+    double insert_qps_per_thread = insert_total / elapsed_sec / num_threads;
+    double search_qps_per_thread = search_total / elapsed_sec / num_threads;
+
+    if (last_exception)
     {
-        std::rethrow_exception(lastException);
+        std::rethrow_exception(last_exception);
     }
+  
+    std::sort(insert_latency_stats.begin(), insert_latency_stats.end());
+    double mean_insert_latency =
+        std::accumulate(insert_latency_stats.begin(), insert_latency_stats.end(), 0.0) / static_cast<float>(insert_total);
+    double p99_insert_latency = (float)insert_latency_stats[(uint64_t)(0.999 * insert_total)];
 
-    auto getPercentile = [](std::vector<double> &latencies, double percentile) -> double {
-        if (latencies.empty())
-            return 0.0;
-        std::sort(latencies.begin(), latencies.end());
-        size_t index = static_cast<size_t>(percentile * latencies.size() / 100.0);
-        return latencies[std::min(index, latencies.size() - 1)];
-    };
-
-    auto getAverageLatency = [](const std::vector<double> &latencies) -> double {
-        if (latencies.empty())
-            return 0.0;
-        return std::accumulate(latencies.begin(), latencies.end(), 0.0) / latencies.size();
-    };
-
-    insertLatencyAvg = getAverageLatency(insertLatencies);
-    insertLatency95 = getPercentile(insertLatencies, 95.0);
-
-    searchLatencyAvg = getAverageLatency(searchLatencies);
-    searchLatency95 = getPercentile(searchLatencies, 95.0);
+    std::sort(search_latency_stats.begin(), search_latency_stats.end());
+    double mean_search_latency =
+        std::accumulate(search_latency_stats.begin(), search_latency_stats.end(), 0.0) / static_cast<float>(insert_total);
+    double p99_search_latency = (float)search_latency_stats[(uint64_t)(0.999 * search_total)];
 
     return true;
 }
