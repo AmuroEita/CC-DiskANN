@@ -150,7 +150,6 @@ bool concurrent_bench(const std::string data_path, const std::string &query_file
             if (++query_idx >= query_num)
                 query_idx %= query_num;
             pool.enqueue_task([&, query_idx] {
-                auto qs = std::chrono::high_resolution_clock::now();
                 try
                 {
                     auto qs = std::chrono::high_resolution_clock::now();
@@ -391,7 +390,7 @@ int main(int argc, char **argv)
                                        program_options_utils::NUMBER_OF_RESULTS_DESCRIPTION);
         optional_configs.add_options()("batch_size", po::value<uint32_t>(&batch_size)->default_value(100),
                                        "batch size");
-        optional_configs.add_options()("begin_num", po::value<uint32_t>(&begin_num)->default_value(5000),
+        optional_configs.add_options()("begin_num", po::value<uint32_t>(&begin_num)->default_value(1000),
                                        "begin number");
         optional_configs.add_options()("max_degree,R", po::value<uint32_t>(&R)->default_value(64),
                                        program_options_utils::MAX_BUILD_DEGREE);
