@@ -29,6 +29,10 @@ bool concurrent_bench(const std::string data_path, const std::string &query_file
                       const diskann::Metric metric, const bool use_opq, const bool use_pq_build, 
                       const uint32_t build_PQ_bytes, const size_t batch_size, const uint32_t recall_at)
 {
+    diskann::cout << "Starting concurrent benchmarking with R: " << R << "  Lbuild: " << L << "  alpha: " << alpha
+                      << " #threads: " << num_threads 
+                      << " #ratio: " << write_ratio << ":" << 1- write_ratio << std::endl;
+  
     size_t data_num, data_dim, aligned_dim;
     diskann::get_bin_metadata(data_path, data_num, data_dim);
 
@@ -244,8 +248,8 @@ inline void load_aligned_bin_part(const std::string &bin_file, T *data, size_t o
 
 int main(int argc, char **argv)
 {
-    std::string data_type, dist_fn, data_path, index_path_prefix, label_file, universal_label, label_type;
-    uint32_t num_threads, R, L, Lf, build_PQ_bytes;
+    std::string data_type, query_file, dist_fn, data_path, label_file, universal_label, label_type;
+    uint32_t num_threads, R, L, Lf, build_PQ_bytes, K, batch_size;
     float alpha;
     bool use_pq_build, use_opq;
 
@@ -261,16 +265,20 @@ int main(int argc, char **argv)
                                        program_options_utils::DATA_TYPE_DESCRIPTION);
         required_configs.add_options()("dist_fn", po::value<std::string>(&dist_fn)->required(),
                                        program_options_utils::DISTANCE_FUNCTION_DESCRIPTION);
-        required_configs.add_options()("index_path_prefix", po::value<std::string>(&index_path_prefix)->required(),
-                                       program_options_utils::INDEX_PATH_PREFIX_DESCRIPTION);
         required_configs.add_options()("data_path", po::value<std::string>(&data_path)->required(),
                                        program_options_utils::INPUT_DATA_PATH);
+        required_configs.add_options()("query_file", po::value<std::string>(&query_file)->required(),
+                                       program_options_utils::QUERY_FILE_DESCRIPTION);
 
         // Optional parameters
         po::options_description optional_configs("Optional");
         optional_configs.add_options()("num_threads,T",
                                        po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
                                        program_options_utils::NUMBER_THREADS_DESCRIPTION);
+        required_configs.add_options()("recall_at,K", po::value<uint32_t>(&K)->default_value(10),
+                                       program_options_utils::NUMBER_OF_RESULTS_DESCRIPTION);
+        required_configs.add_options()("batch_size", po::value<uint32_t>(&batch_size)->default_value(100),
+                                       program_options_utils::NUMBER_OF_RESULTS_DESCRIPTION);
         optional_configs.add_options()("max_degree,R", po::value<uint32_t>(&R)->default_value(64),
                                        program_options_utils::MAX_BUILD_DEGREE);
         optional_configs.add_options()("Lbuild,L", po::value<uint32_t>(&L)->default_value(100),
@@ -334,74 +342,11 @@ int main(int argc, char **argv)
 
     try
     {
-        diskann::cout << "Starting index build with R: " << R << "  Lbuild: " << L << "  alpha: " << alpha
-                      << "  #threads: " << num_threads << std::endl;
-
-        size_t data_num, data_dim, aligned_dim;
-        size_t begin_size = 1000;
-        diskann::get_bin_metadata(data_path, data_num, data_dim);
-
-        auto index_build_params = diskann::IndexWriteParametersBuilder(L, R)
-                                      .with_filter_list_size(Lf)
-                                      .with_alpha(alpha)
-                                      .with_saturate_graph(false)
-                                      .with_num_threads(num_threads)
-                                      .build();
-
-        auto filter_params = diskann::IndexFilterParamsBuilder()
-                                 .with_universal_label(universal_label)
-                                 .with_label_file(label_file)
-                                 .with_save_path_prefix(index_path_prefix)
-                                 .build();
-        auto config = diskann::IndexConfigBuilder()
-                          .with_metric(metric)
-                          .with_dimension(data_dim)
-                          .with_max_points(data_num)
-                          .with_data_load_store_strategy(diskann::DataStoreStrategy::MEMORY)
-                          .with_graph_load_store_strategy(diskann::GraphStoreStrategy::MEMORY)
-                          .with_data_type(data_type)
-                          .with_label_type(label_type)
-                          .is_dynamic_index(false)
-                          .with_index_write_params(index_build_params)
-                          .is_enable_tags(false)
-                          .is_use_opq(use_opq)
-                          .is_pq_dist_build(use_pq_build)
-                          .with_num_pq_chunks(build_PQ_bytes)
-                          .build();
-
-        auto index_factory = diskann::IndexFactory(config);
-        auto index = index_factory.create_instance();
-
         if (data_type == "float") {
-            float *data = nullptr;
-            aligned_dim = ROUND_UP(data_dim, 8);
-            diskann::alloc_aligned((void **)&data, data_num * aligned_dim * sizeof(float),
-                            8 * sizeof(float));
-            load_aligned_bin_part(data_path, data, 0, begin_size);
-
-            std::vector<uint32_t> tags(begin_size);
-            std::iota(tags.begin(), tags.end(), 1 + static_cast<uint32_t>(0));
-            index->build(data, begin_size, tags);
-            
-            load_aligned_bin_part(data_path, data, begin_size, data_num - begin_size);
-
-            size_t num_failed = 0;
-            diskann::Timer insert_timer;
-
-#pragma omp parallel for num_threads((int32_t)num_threads) schedule(dynamic) reduction(+ : num_failed)
-            for (int64_t j = begin_size; j < (int64_t)data_num; j++)
-            {
-                int insert_result = -1;
-                insert_result = index->insert_point(&data[(j - begin_size) * aligned_dim], 1 + static_cast<uint32_t>(j));
-            }
-
-            const double elapsedSeconds = insert_timer.elapsed() / 1000000.0;
-            std::cout << "Cores " << num_threads << " Insertion time " << elapsedSeconds << " seconds (" << (data_num - begin_size) / elapsedSeconds
-                    << " points/second overall, " << (data_num - begin_size) / elapsedSeconds / num_threads << " per thread)\n ";
+            concurrent_bench<float>(data_path, query_file, begin_num, L, R, alpha, num_threads, 
+                                    metric, use_opq, use_pq_build, build_PQ_bytes, batch_size, recall_at);
         }
         
-        // index->build(data_path, data_num, filter_params);
-        // index->save(index_path_prefix.c_str());
         index.reset();
         return 0;
     }
