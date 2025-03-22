@@ -52,7 +52,7 @@ void ThreadPool::enqueue_task(std::function<void()> task)
 void ThreadPool::wait_for_tasks()
 {
     std::unique_lock<std::mutex> lock(queue_mutex);
-    finish_condition.wait(lock, [this] { return tasks.empty() && activeTasks == 0; });
+    finish_condition.wait(lock, [this] { return tasks.empty() && active_tasks == 0; });
 }
 
 std::thread::id ThreadPool::get_current_thread_id() const
