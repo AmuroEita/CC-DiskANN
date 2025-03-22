@@ -345,8 +345,17 @@ int main(int argc, char **argv)
         if (data_type == "float") {
             concurrent_bench<float>(data_path, query_file, begin_num, L, R, alpha, num_threads, 
                                     metric, use_opq, use_pq_build, build_PQ_bytes, batch_size, recall_at);
+        } else if (data_type == "int8") {
+            concurrent_bench<int8>(data_path, query_file, begin_num, L, R, alpha, num_threads, 
+                                   metric, use_opq, use_pq_build, build_PQ_bytes, batch_size, recall_at);
+        } else if (data_type == "uint8") {
+            concurrent_bench<uint8>(data_path, query_file, begin_num, L, R, alpha, num_threads, 
+                                    metric, use_opq, use_pq_build, build_PQ_bytes, batch_size, recall_at);
+        } else {
+            std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
+            return -1;
         }
-        
+      
         index.reset();
         return 0;
     }
