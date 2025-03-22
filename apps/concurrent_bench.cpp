@@ -23,6 +23,19 @@
 
 namespace po = boost::program_options;
 
+template<typename TagT = uint32_t>
+struct SearchResult {
+    size_t offset;
+    size_t query_idx;
+    std::vector<TagT> query_result_tags;
+
+    SearchResult(size_t offset, size_t idx, std::vector<TagT> tags) 
+        : offset(offset),
+          query_idx(idx),
+          query_result_tags(std::move(tags))  
+    {}
+};
+
 template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t>
 bool concurrent_bench(const std::string data_path, const std::string &query_file, const size_t begin_num, 
                       const uint32_t L, const uint32_t R, const float alpha, const uint32_t num_threads, 
