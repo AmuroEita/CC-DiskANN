@@ -240,7 +240,7 @@ bool concurrent_bench(const std::string data_path, const std::string &query_file
     }
 
     if (!file_exists) {
-        csv_file << "Name,Threads,Write Ratio (%),Write Throughput (points/second),"
+        csv_file << "Name,Max Connections,ef Build,ef Search,Threads,Write Ratio (%),Write Throughput (points/second),"
                  << "Write Per-thread Throughput (points/second),Write Mean Latency (microseconds),"
                  << "Write P99 Latency (microseconds),Read Ratio (%),Read Throughput (points/second),"
                  << "Read Per-thread Throughput (points/second),Read Mean Latency (microseconds),"
@@ -248,6 +248,9 @@ bool concurrent_bench(const std::string data_path, const std::string &query_file
     }
 
     csv_file << "diskann" << "," 
+             << 32 << "," 
+             << 50 << "," 
+             << 80 << "," 
              << num_threads << ","
              << write_ratio * 100 << ","          // Write Ratio
              << insert_qps << ","                 // Write Overall Throughput
