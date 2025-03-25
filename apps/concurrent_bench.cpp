@@ -247,10 +247,10 @@ bool concurrent_bench(const std::string data_path, const std::string &query_file
                  << "Read P99 Latency (microseconds)\n";
     }
 
-    csv_file << "diskann" << "," 
+    csv_file << "cufe" << "," 
              << 32 << "," 
              << 50 << "," 
-             << 80 << "," 
+             << 50 << "," 
              << num_threads << ","
              << write_ratio * 100 << ","          // Write Ratio
              << insert_qps << ","                 // Write Overall Throughput

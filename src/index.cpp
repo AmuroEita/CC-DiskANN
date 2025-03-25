@@ -882,70 +882,53 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
     while (best_L_nodes.has_unexpanded_node())
     {
-        auto nbr = best_L_nodes.closest_unexpanded();
-        auto n = nbr.id;
+        auto beam = best_L_nodes.closest_unexpanded_beam(); // return nodes of size k
+        for (auto nbr : beam) {
+            auto n = nbr.id;
 
-        // Add node to expanded nodes to create pool for prune later
-        if (!search_invocation)
-        {
-            if (!use_filter)
+            // Add node to expanded nodes to create pool for prune later
+            if (!search_invocation)
             {
-                expanded_nodes.emplace_back(nbr);
-            }
-            else
-            { // in filter based indexing, the same point might invoke
-                // multiple iterate_to_fixed_points, so need to be careful
-                // not to add the same item to pool multiple times.
-                if (std::find(expanded_nodes.begin(), expanded_nodes.end(), nbr) == expanded_nodes.end())
+                if (!use_filter)
                 {
                     expanded_nodes.emplace_back(nbr);
                 }
-            }
-        }
-
-        // Find which of the nodes in des have not been visited before
-        id_scratch.clear();
-        dist_scratch.clear();
-        if (_dynamic_index)
-        {
-            LockGuard guard(_locks[n]);
-            for (auto id : _graph_store->get_neighbours(n))
-            {
-                assert(id < _max_points + _num_frozen_pts);
-
-                if (use_filter)
-                {
-                    // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
-                    if (!detect_common_filters(id, search_invocation, filter_labels))
-                        continue;
-                }
-
-                if (is_not_visited(id))
-                {
-                    id_scratch.push_back(id);
+                else
+                { // in filter based indexing, the same point might invoke
+                    // multiple iterate_to_fixed_points, so need to be careful
+                    // not to add the same item to pool multiple times.
+                    if (std::find(expanded_nodes.begin(), expanded_nodes.end(), nbr) == expanded_nodes.end())
+                    {
+                        expanded_nodes.emplace_back(nbr);
+                    }
                 }
             }
-        }
-        else
-        {
-            _locks[n].lock();
-            auto nbrs = _graph_store->get_neighbours(n);
-            _locks[n].unlock();
-            for (auto id : nbrs)
+            // Find which of the nodes in des have not been visited before
+            id_scratch.clear();
+            dist_scratch.clear();
             {
-                assert(id < _max_points + _num_frozen_pts);
+                if (_dynamic_index)
+                    _locks[n].lock();
 
-                if (use_filter)
+                for (auto id : _graph_store->get_neighbours(n))
                 {
-                    // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
-                    if (!detect_common_filters(id, search_invocation, filter_labels))
-                        continue;
+                    assert(id < _max_points + _num_frozen_pts);
+
+                    if (use_filter)
+                    {
+                        // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
+                        if (!detect_common_filters(id, search_invocation, filter_labels))
+                            continue;
+                    }
+
+                    if (is_not_visited(id))
+                    {
+                        id_scratch.push_back(id);
+                    }
                 }
 
-                if (is_not_visited(id))
-                {
-                    id_scratch.push_back(id);
-                }
+                if (_dynamic_index)
+                    _locks[n].unlock();
             }
         }
 
@@ -962,8 +945,28 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             }
         }
 
-        assert(dist_scratch.capacity() >= id_scratch.size());
-        compute_dists(id_scratch, dist_scratch);
+        // Compute distances to unvisited nodes in the expansion
+        if (_pq_dist)
+        {
+            assert(dist_scratch.capacity() >= id_scratch.size());
+            compute_dists(id_scratch, dist_scratch);
+        }
+        else
+        {
+            assert(dist_scratch.size() == 0);
+            for (size_t m = 0; m < id_scratch.size(); ++m)
+            {
+                uint32_t id = id_scratch[m];
+
+                if (m + 1 < id_scratch.size())
+                {
+                    auto nextn = id_scratch[m + 1];
+                    _data_store->prefetch_vector(nextn);
+                }
+
+                dist_scratch.push_back(_data_store->get_distance(aligned_query, id));
+            }
+        }
         cmps += (uint32_t)id_scratch.size();
 
         // Insert <id, dist> pairs into the pool of candidates

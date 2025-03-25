@@ -104,6 +104,29 @@ class NeighborPriorityQueue
         return _data[pre];
     }
 
+    std::vector<Neighbor> closest_unexpanded_beam()
+    {
+        std::vector<Neighbor> nearest_neighbors;
+
+        while (_cur < _size && nearest_neighbors.size() < 2)
+        {
+            if (!_data[_cur].expanded)
+            {
+                _data[_cur].expanded = true;
+                nearest_neighbors.push_back(_data[_cur]);
+                _cur++;
+            }
+            else break;
+        }
+        
+        while (_cur < _size && _data[_cur].expanded)
+        {
+            _cur++;
+        }
+
+        return nearest_neighbors;
+    }
+
     bool has_unexpanded_node() const
     {
         return _cur < _size;
