@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 #include <memory>
+#include <sys/mman.h>
 #include "abstract_scratch.h"
 #include "in_mem_data_store.h"
 
@@ -14,9 +15,18 @@ template <typename data_t>
 InMemDataStore<data_t>::InMemDataStore(const location_t num_points, const size_t dim,
                                        std::unique_ptr<Distance<data_t>> distance_fn)
     : AbstractDataStore<data_t>(num_points, dim), _distance_fn(std::move(distance_fn))
+// {
+//     _aligned_dim = ROUND_UP(dim, _distance_fn->get_required_alignment());
+//     alloc_aligned(((void **)&_data), this->_capacity * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
+//     std::memset(_data, 0, this->_capacity * _aligned_dim * sizeof(data_t));
+// }
 {
     _aligned_dim = ROUND_UP(dim, _distance_fn->get_required_alignment());
-    alloc_aligned(((void **)&_data), this->_capacity * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
+    constexpr size_t alignment = 2 * 1024 * 1024;
+    size_t size = this->_capacity * _aligned_dim * sizeof(data_t);
+    size = (size + alignment - 1) / alignment * alignment;
+    alloc_aligned(((void **)&_data), size, alignment);
+    madvise(_data, size, MADV_HUGEPAGE);
     std::memset(_data, 0, this->_capacity * _aligned_dim * sizeof(data_t));
 }
 

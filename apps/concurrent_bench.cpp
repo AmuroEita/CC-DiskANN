@@ -232,7 +232,7 @@ bool concurrent_bench(const std::string data_path, const std::string &query_file
     diskann::aligned_free(query);
 
     const std::string filename = "stats.csv";
-    bool file_exists = std::filesystem::exists(filename); // 检查文件是否存在
+    bool file_exists = std::filesystem::exists(filename); 
     std::ofstream csv_file(filename, std::ios::app);
     if (!csv_file.is_open()) {
         std::cerr << "Error opening CSV file!" << std::endl;
@@ -247,10 +247,10 @@ bool concurrent_bench(const std::string data_path, const std::string &query_file
                  << "Read P99 Latency (microseconds)\n";
     }
 
-    csv_file << "diskann" << "," 
+    csv_file << "pyanns" << "," 
              << 32 << "," 
              << 50 << "," 
-             << 80 << "," 
+             << 50 << "," 
              << num_threads << ","
              << write_ratio * 100 << ","          // Write Ratio
              << insert_qps << ","                 // Write Overall Throughput
