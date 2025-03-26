@@ -248,9 +248,9 @@ bool concurrent_bench(const std::string data_path, const std::string &query_file
     }
 
     csv_file << "diskann" << "," 
-             << 32 << "," 
-             << 50 << "," 
-             << 50 << "," 
+             << 16 << "," 
+             << 90 << "," 
+             << 90 << "," 
              << num_threads << ","
              << write_ratio * 100 << ","          // Write Ratio
              << insert_qps << ","                 // Write Overall Throughput
