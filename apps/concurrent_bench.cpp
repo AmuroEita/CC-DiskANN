@@ -56,12 +56,10 @@ bool concurrent_bench(const std::string data_path, const std::string &query_file
                   << " #threads: " << num_threads << " #ratio: " << write_ratio << ":" << 1 - write_ratio 
                   << " event_rate: 10K/s" << std::endl;
 
-    // 获取数据维度信息
     size_t data_num, data_dim, aligned_dim;
     diskann::get_bin_metadata(data_path, data_num, data_dim);
-    aligned_dim = data_dim; // 假设对齐维度与原始维度相同
+    aligned_dim = data_dim; 
 
-    // 配置索引
     auto index_build_params = diskann::IndexWriteParametersBuilder(Lb, R)
                                   .with_alpha(alpha)
                                   .with_saturate_graph(false)
@@ -88,7 +86,6 @@ bool concurrent_bench(const std::string data_path, const std::string &query_file
     auto index_factory = diskann::IndexFactory(config);
     auto index = index_factory.create_instance();
 
-    // 加载初始数据和查询数据
     T *data = nullptr;
     diskann::load_aligned_bin<T>(data_path, data, data_num, data_dim, aligned_dim);
 
@@ -96,43 +93,36 @@ bool concurrent_bench(const std::string data_path, const std::string &query_file
     size_t query_num, query_dim, query_aligned_dim;
     diskann::load_aligned_bin<T>(query_file, query, query_num, query_dim, query_aligned_dim);
 
-    // 构建初始索引
     std::vector<uint32_t> tags(begin_num);
     std::iota(tags.begin(), tags.end(), 1 + static_cast<uint32_t>(0));
     index->build(data, begin_num, tags);
 
-    // 流式实验参数
-    const double event_rate = 10000.0; // 10K events/s
-    const double experiment_time = 10.0; // 实验运行 10 秒
+    double event_rate = 5000 * num_threads;
+    const double experiment_time = 10.0; 
 
-    // 事件定义
     struct Event {
-        bool is_insert;          // true 表示插入，false 表示查询
-        std::vector<T> data;     // 数据点
-        TagT id;                 // 数据点的 ID（插入时使用）
-        size_t query_idx;        // 查询索引（查询时使用）
+        bool is_insert;          
+        std::vector<T> data;     
+        TagT id;                 
+        size_t query_idx;        
     };
 
-    // 事件队列和同步工具
     std::queue<Event> event_queue;
     std::mutex queue_mutex;
     std::condition_variable queue_cv;
     std::atomic<bool> running(true);
 
-    // 统计变量
     std::mutex insert_latency_mutex, search_latency_mutex, result_mutex;
     std::vector<double> insert_latency_stats, search_latency_stats;
     std::vector<std::pair<size_t, std::vector<TagT>>> search_results;
     std::atomic<size_t> insert_count(0), search_count(0);
 
-    // 随机数生成器（用于模拟数据点）
     std::random_device rd;
     std::mt19937 gen(rd());
     std::uniform_real_distribution<float> dis(0.0, 1.0);
 
-    // 生产者线程：以 10K/s 速率生成事件
     auto producer = [&]() {
-        size_t id = begin_num + 1; // 从 begin_num + 1 开始分配 ID
+        size_t id = begin_num + 1; 
         size_t query_idx = 0;
         auto start_time = std::chrono::high_resolution_clock::now();
         while (true) {
@@ -146,13 +136,11 @@ bool concurrent_bench(const std::string data_path, const std::string &query_file
                 event.data.resize(aligned_dim);
 
                 if (dis(gen) < write_ratio) {
-                    // 插入事件：从 data 中取数据
-                    size_t data_idx = (id - 1) % data_num; // 循环使用数据
+                    size_t data_idx = (id - 1) % data_num; 
                     std::copy(data + data_idx * aligned_dim, data + (data_idx + 1) * aligned_dim, event.data.begin());
                     event.is_insert = true;
                     event.id = static_cast<TagT>(id++);
                 } else {
-                    // 查询事件：从 query 中取数据
                     event.query_idx = query_idx % query_num;
                     std::copy(query + event.query_idx * query_aligned_dim, 
                               query + (event.query_idx + 1) * query_aligned_dim, 
@@ -167,7 +155,6 @@ bool concurrent_bench(const std::string data_path, const std::string &query_file
                 }
                 queue_cv.notify_one();
 
-                // 控制速率：每秒 10K 事件
                 std::this_thread::sleep_for(std::chrono::microseconds(1000000 / static_cast<int>(event_rate)));
             }
         }
@@ -175,7 +162,6 @@ bool concurrent_bench(const std::string data_path, const std::string &query_file
         queue_cv.notify_all();
     };
 
-    // 工作线程：处理队列中的事件
     auto worker = [&](int thread_id) {
         while (running || !event_queue.empty()) {
             Event event;
@@ -197,7 +183,7 @@ bool concurrent_bench(const std::string data_path, const std::string &query_file
                 std::chrono::duration<double> diff = qe - qs;
                 if (insert_result == 0) {
                     std::lock_guard<std::mutex> lock(insert_latency_mutex);
-                    insert_latency_stats.push_back(diff.count() * 1000000); // 微秒
+                    insert_latency_stats.push_back(diff.count() * 1000000); 
                     insert_count++;
                 } else {
                     std::cerr << "Insert failed for ID " << event.id << std::endl;
@@ -211,7 +197,7 @@ bool concurrent_bench(const std::string data_path, const std::string &query_file
                 std::chrono::duration<double> diff = qe - qs;
                 {
                     std::lock_guard<std::mutex> lock(search_latency_mutex);
-                    search_latency_stats.push_back(diff.count() * 1000000); // 微秒
+                    search_latency_stats.push_back(diff.count() * 1000000); 
                 }
                 {
                     std::lock_guard<std::mutex> lock(result_mutex);
@@ -222,7 +208,6 @@ bool concurrent_bench(const std::string data_path, const std::string &query_file
         }
     };
 
-    // 启动实验
     auto start_time = std::chrono::high_resolution_clock::now();
     std::thread producer_thread(producer);
     std::vector<std::thread> workers;
@@ -230,14 +215,12 @@ bool concurrent_bench(const std::string data_path, const std::string &query_file
         workers.emplace_back(worker, i);
     }
 
-    // 等待完成
     producer_thread.join();
     for (auto& w : workers) w.join();
 
     auto end_time = std::chrono::high_resolution_clock::now();
     double elapsed_sec = std::chrono::duration<double>(end_time - start_time).count();
 
-    // 计算统计信息
     double insert_qps = insert_count / elapsed_sec;
     double search_qps = search_count / elapsed_sec;
     double insert_qps_per_thread = insert_qps / num_threads;
@@ -255,7 +238,6 @@ bool concurrent_bench(const std::string data_path, const std::string &query_file
     double p99_search_latency = search_latency_stats.empty() ? 0.0 :
         search_latency_stats[static_cast<size_t>(0.999 * search_latency_stats.size())];
 
-    // 输出结果
     std::cout << "Total time: " << elapsed_sec << " seconds" << std::endl
               << "Insertion Statistics:" << std::endl
               << "  Ratio: " << write_ratio * 100 << "%" << std::endl
@@ -270,11 +252,9 @@ bool concurrent_bench(const std::string data_path, const std::string &query_file
               << "  Mean latency: " << mean_search_latency << " microseconds" << std::endl
               << "  P99 latency: " << p99_search_latency << " microseconds" << std::endl;
 
-    // 释放内存
     diskann::aligned_free(data);
     diskann::aligned_free(query);
 
-    // 写入 CSV 文件
     const std::string filename = "stats.csv";
     bool file_exists = std::filesystem::exists(filename);
     std::ofstream csv_file(filename, std::ios::app);
