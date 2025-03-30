@@ -136,6 +136,8 @@ bool concurrent_bench(const std::string data_path, const std::string &query_file
                 event.data.resize(aligned_dim);
 
                 if (dis(gen) < write_ratio) {
+                    if (id > data_num) break;
+
                     size_t data_idx = (id - 1) % data_num; 
                     std::copy(data + data_idx * aligned_dim, data + (data_idx + 1) * aligned_dim, event.data.begin());
                     event.is_insert = true;
